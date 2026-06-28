@@ -13,7 +13,7 @@ import urllib.request
 import urllib.parse
 from datetime import datetime
 from collections import deque
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -138,6 +138,7 @@ class GrabManager:
         self.ads: List[str] = []
         self.region = ""
         self.images: Dict[str, str] = {}   # shape_key -> 解析出的镜像 OCID(缓存)
+        self.user_images: Dict[str, str] = {}   # Web 界面用户所选镜像 shape_key -> ocid/"auto"
 
     # ---------- 日志 ----------
     def log(self, msg: str):
@@ -162,7 +163,8 @@ class GrabManager:
             os.makedirs("/data", exist_ok=True)
             with open(STATE_FILE, "w") as f:
                 json.dump({"items": self.items, "plan": self.plan,
-                           "deadline": self.deadline, "started_at": self.started_at}, f)
+                           "deadline": self.deadline, "started_at": self.started_at,
+                           "images": self.user_images}, f)
         except Exception as e:
             self.log(f"保存任务失败: {e}")
 
@@ -187,6 +189,7 @@ class GrabManager:
         self.plan = data["plan"]
         self.deadline = data.get("deadline")
         self.started_at = data.get("started_at") or time.time()
+        self.user_images = data.get("images") or {}
         self.stop_flag.clear()
         self.state = "running"
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -221,6 +224,11 @@ class GrabManager:
     # ---------- 镜像自动解析(留空时按区域+架构取最新官方镜像) ----------
     def _resolve_image(self, shape_key: str) -> str:
         if self.images.get(shape_key):
+            return self.images[shape_key]
+        # 0) Web 界面用户所选优先
+        sel = (self.user_images or {}).get(shape_key)
+        if sel and str(sel).strip().lower() not in ("", "auto"):
+            self.images[shape_key] = str(sel).strip()
             return self.images[shape_key]
         # 1) .env 显式指定优先(非空且非 "auto")
         env_override = IMAGE_ID if shape_key == "arm" else IMAGE_ID_AMD
@@ -270,7 +278,8 @@ class GrabManager:
             return []
 
     # ---------- 启动 ----------
-    def start(self, items: List[Dict], duration_minutes: Optional[int]) -> Dict:
+    def start(self, items: List[Dict], duration_minutes: Optional[int],
+              images: Optional[Dict[str, str]] = None) -> Dict:
         with self.lock:
             if self.state == "running":
                 return {"ok": False, "error": "已在运行中"}
@@ -301,6 +310,8 @@ class GrabManager:
             self.plan = plan
             self.created = []
             self.items = items
+            self.user_images = {k: v for k, v in (images or {}).items() if v}
+            self.images = {}   # 清缓存,让新选择生效
             self.logs.clear()
             self.stop_flag.clear()
             self.state = "running"
@@ -482,6 +493,8 @@ class GrabManager:
             "created": self.created,
             "remaining_seconds": remaining,
             "duration_minutes": int((self.deadline - self.started_at) / 60) if (self.deadline and self.started_at) else None,
+            "user_images": self.user_images,
+            "resolved_images": self.images,
             "logs": list(self.logs),
         }
 
@@ -590,12 +603,51 @@ def query_actual_usage():
     return r
 
 
+# ---------------- 镜像列表(供 Web 选择) ----------------
+_IMAGE_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+
+
+def _list_images_for_shape(shape_oci: str) -> List[Dict]:
+    try:
+        out = subprocess.run(
+            ["oci", "compute", "image", "list", "--compartment-id", COMPARTMENT_ID,
+             "--shape", shape_oci, "--sort-by", "TIMECREATED", "--sort-order", "DESC",
+             "--output", "json"],
+            capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL)
+        data = (json.loads(out.stdout or "{}") or {}).get("data", []) or []
+    except Exception:
+        data = []
+    res = []
+    for x in data[:150]:
+        res.append({
+            "id": x.get("id"),
+            "name": x.get("display-name"),
+            "os": x.get("operating-system"),
+            "osver": x.get("operating-system-version"),
+        })
+    return res
+
+
+def list_all_images(refresh: bool = False) -> Dict[str, Any]:
+    now = time.time()
+    if not refresh and _IMAGE_CACHE["data"] and now - _IMAGE_CACHE["ts"] < 3600:
+        return _IMAGE_CACHE["data"]
+    res = {
+        "arm": _list_images_for_shape(SHAPES["arm"]["shape"]),
+        "micro": _list_images_for_shape(SHAPES["micro"]["shape"]),
+        "fetched_at": int(now),
+    }
+    _IMAGE_CACHE.update(ts=now, data=res)
+    return res
+
+
 # ======================================================================
 #  API
 # ======================================================================
 class StartReq(BaseModel):
     items: List[Dict]
     duration_minutes: Optional[int] = None
+    images: Optional[Dict[str, str]] = None   # {"arm": ocid/"auto", "micro": ocid/"auto"}
 
 
 @app.get("/api/presets")
@@ -632,6 +684,14 @@ def api_notify_test():
             "results": [{"channel": c, "ok": o, "info": i} for c, o, i in results]}
 
 
+@app.get("/api/images")
+def api_images(refresh: int = 0):
+    """拉取该区域可用镜像(按 ARM/AMD 形状分组),供 Web 选择。结果缓存 1 小时。"""
+    if not COMPARTMENT_ID:
+        return {"arm": [], "micro": [], "error": "未配置 COMPARTMENT_ID"}
+    return list_all_images(refresh=bool(refresh))
+
+
 @app.post("/api/validate")
 def api_validate(req: StartReq):
     ok, err = validate_items(req.items)
@@ -640,7 +700,7 @@ def api_validate(req: StartReq):
 
 @app.post("/api/start")
 def api_start(req: StartReq):
-    res = MANAGER.start(req.items, req.duration_minutes)
+    res = MANAGER.start(req.items, req.duration_minutes, req.images)
     code = 200 if res.get("ok") else 400
     return JSONResponse(res, status_code=code)
 

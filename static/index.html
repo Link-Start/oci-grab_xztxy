@@ -26,6 +26,8 @@
   th { color: #94a3b8; font-weight: 500; font-size: 12px; }
   input[type=number] { width: 72px; background: #0f172a; border: 1px solid #475569;
         color: #e2e8f0; border-radius: 6px; padding: 5px; text-align: center; }
+  select { background:#0f172a; border:1px solid #475569; color:#e2e8f0; border-radius:6px;
+        padding:5px 8px; font-size:13px; max-width:360px; }
   .btn { background: #334155; color: #e2e8f0; border: none; border-radius: 8px;
          padding: 8px 16px; cursor: pointer; font-size: 14px; }
   .btn:hover { background: #475569; }
@@ -84,6 +86,19 @@
   </div>
 
   <div class="card">
+    <h2>🖼 镜像选择(留空 = 自动用该区域最新官方镜像)</h2>
+    <div class="row-actions">
+      <label>ARM(A1.Flex)</label>
+      <select id="imgArm"><option value="auto">自动 · 最新官方镜像</option></select>
+      <label>AMD(E2.1.Micro)</label>
+      <select id="imgMicro"><option value="auto">自动 · 最新官方镜像</option></select>
+      <button class="btn sm" id="imgRefresh" onclick="loadImages(true)">↻ 刷新镜像列表</button>
+      <span class="pill" id="imgStatus"></span>
+    </div>
+    <div class="pill" style="margin-top:6px">选好后点「开始抢占」即按所选镜像创建;不选则自动用最新官方镜像。配置会随任务保存,容器重启自动续抢也沿用。</div>
+  </div>
+
+  <div class="card">
     <h2>③ 运行时长</h2>
     <div class="row-actions">
       <label><input type="radio" name="dur" value="until" checked> 一直跑到抢满</label>
@@ -118,10 +133,7 @@ async function init() {
     `区域 ${r.region||'(未配置)'} · 免费额度: ARM ${LIMITS.arm_ocpus}核/${LIMITS.arm_memory_gb}GB + AMD最多${LIMITS.micro_count}台(1核/1G) · 共享存储 ${LIMITS.boot_gb}GB`;
   if (!r.configured) {
     const w=document.getElementById('cfgwarn'); w.style.display='block';
-    w.textContent='❌ 后端缺少 COMPARTMENT_ID / SUBNET_ID / IMAGE_ID 配置,请检查 .env。';
-  } else if (!r.amd_ready) {
-    const w=document.getElementById('cfgwarn'); w.style.display='block';
-    w.textContent='⚠️ 未配置 IMAGE_ID_AMD,AMD(E2.1.Micro)规格不可用。';
+    w.textContent='❌ 后端缺少 COMPARTMENT_ID / SUBNET_ID 配置,请检查 .env。';
   }
   const box = document.getElementById('presets');
   PRESETS.forEach(p => {
@@ -148,6 +160,8 @@ async function init() {
   } else {
     selectPreset(PRESETS[1]); // 无运行任务时用默认方案B
   }
+  PENDING_IMG = (cur && cur.user_images && Object.keys(cur.user_images).length) ? cur.user_images : null;
+  loadImages();   // 自动拉取镜像列表填充选择器(非阻塞)
   poll(); setInterval(poll, 3000);
   pollUsage(); setInterval(pollUsage, 15000);
 }
@@ -238,11 +252,40 @@ function recalc() {
   return ok;
 }
 
+let PENDING_IMG = null;
+function setImg(id, val) {
+  if (!val || val === 'auto') return;
+  const sel = document.getElementById(id);
+  if (![...sel.options].some(o => o.value === val))
+    sel.add(new Option('已选 · …' + String(val).slice(-14), val));
+  sel.value = val;
+}
+async function loadImages(refresh) {
+  const st = document.getElementById('imgStatus');
+  st.textContent = '拉取镜像中…';
+  let d;
+  try { d = await fetch('/api/images' + (refresh ? '?refresh=1' : '')).then(r => r.json()); }
+  catch (e) { st.textContent = '拉取失败'; return; }
+  if (d.error) { st.textContent = d.error; return; }
+  const fill = (selId, arr) => {
+    const sel = document.getElementById(selId);
+    const keep = sel.value;
+    sel.innerHTML = '<option value="auto">自动 · 最新官方镜像</option>' +
+      (arr || []).map(im => `<option value="${im.id}">${im.name}</option>`).join('');
+    if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+  };
+  fill('imgArm', d.arm); fill('imgMicro', d.micro);
+  if (PENDING_IMG) { setImg('imgArm', PENDING_IMG.arm); setImg('imgMicro', PENDING_IMG.micro); PENDING_IMG = null; }
+  st.textContent = `ARM ${(d.arm || []).length} 个 · AMD ${(d.micro || []).length} 个`;
+}
+
 async function start() {
   if (!recalc()) return;
   const dur = document.querySelector('input[name=dur]:checked').value;
   const body = { items: readItems(),
-    duration_minutes: dur==='limit' ? +document.getElementById('durMin').value : null };
+    duration_minutes: dur==='limit' ? +document.getElementById('durMin').value : null,
+    images: { arm: document.getElementById('imgArm').value,
+              micro: document.getElementById('imgMicro').value } };
   const j = await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)}).then(r=>r.json());
   if (!j.ok) alert('启动失败: ' + (j.error||'未知'));
