@@ -52,6 +52,8 @@ docker compose up -d --build
 
 > 📖 **Where does each value come from?** Step-by-step guide with the exact Oracle Cloud console location for every OCID / token: **[CONFIG.md](CONFIG.md)**.
 
+> 🤖 **Deploying with an AI agent?** Hand it the repo URL + **[AI_DEPLOY.md](AI_DEPLOY.md)** — it will collect the parameters from you and deploy automatically.
+
 ### Security
 - The dashboard can create cloud resources and has **no authentication** — bind it to `127.0.0.1` or a trusted LAN only, never expose it to the internet.
 - Your `oci/`, `keys/`, `.env` hold private keys/credentials — they are gitignored and must never be committed.
@@ -101,6 +103,8 @@ docker compose up -d --build
 推送时机:🚀 启动、✅ 每抢到一台、🎉 全部抢满、⚠️ 配额上限、❌ 出错。配置后可用 `curl -X POST http://127.0.0.1:8090/api/notify-test` 测试。
 
 > 📖 **每个参数(OCID / token)在 Oracle 控制台的确切获取位置**,见详细配置指引:**[CONFIG.md](CONFIG.md)**。
+
+> 🤖 **想让 AI 帮你部署?** 把仓库地址 + **[AI_DEPLOY.md](AI_DEPLOY.md)** 丢给 AI,它会逐项向你索取参数并自动部署启动。
 
 ### 安全提醒
 - 面板**无登录鉴权**且能创建云资源——只绑定本机或可信内网,切勿暴露公网。
