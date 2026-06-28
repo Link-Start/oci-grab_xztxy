@@ -3,8 +3,9 @@ oci/
 keys/
 data/
 proxy/
-router-backup/
-ka/
+_*
 *.log
-__pycache__/
-*.pyc
+x86imgs.json
+parse_x86.py
+t_*.json
+monitor.sh
