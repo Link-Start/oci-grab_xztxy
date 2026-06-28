@@ -16,11 +16,11 @@ Oracle's Always Free ARM (A1.Flex) capacity is frequently exhausted (`Out of hos
 - **Mixed shapes & multi-instance**: e.g. 2× AMD micro + 1× ARM 4c/24G in one job.
 - **Idempotent & resumable**: tracks which named instances already exist; a container restart auto-resumes the job from `data/job.json` and never double-creates.
 - **Runtime limit**: run until grabbed, or for N minutes.
-- **Optional Telegram notification** on success.
+- **Push notifications** (PushPlus / WeChat + Telegram) on each instance grabbed, all-done, and errors/quota-exceeded; PushPlus works in mainland China without a proxy.
 - Engine retries on `Out of host capacity`, backs off on `429`, and stops on `LimitExceeded`.
 
 ### Architecture
-- `app.py` — FastAPI backend + background grab engine (`GrabManager`), free-tier validation, REST API (`/api/presets|validate|start|stop|status|usage`), auto-resume.
+- `app.py` — FastAPI backend + background grab engine (`GrabManager`), free-tier validation, REST API (`/api/presets|validate|start|stop|status|usage|notify-test`), auto-resume.
 - `static/index.html` — single-page dashboard (presets, custom builder, live quota meters, real-time log, real-account usage panel).
 - `grab.sh` — standalone shell grabber (CLI alternative, single-shape).
 - `Dockerfile` / `docker-compose.yml` — deployment.
@@ -42,8 +42,13 @@ docker compose up -d --build
 | `SUBNET_ID` | Subnet OCID |
 | `IMAGE_ID` | ARM (aarch64) image OCID |
 | `IMAGE_ID_AMD` | AMD (x86) image OCID, for E2.1.Micro |
-| `SSH_KEY_FILE` | in-container path to the public key (default `/keys/id_rsa.pem`) |
-| `TG_BOT_TOKEN` / `TG_CHAT_ID` | optional Telegram notify |
+| `SSH_KEY_FILE` | in-container path to the public key (default `/keys/id_rsa.pub`) |
+| `PUSHPLUS_TOKEN` | optional — PushPlus token for WeChat push (https://www.pushplus.plus, no proxy needed in China) |
+| `PUSHPLUS_TOPIC` | optional — PushPlus group code for one-to-many push |
+| `TG_BOT_TOKEN` / `TG_CHAT_ID` | optional — Telegram bot push |
+| `NOTIFY_PROXY` | optional — proxy for **Telegram only** (usually required in mainland China), e.g. `http://192.168.1.1:7890` |
+
+> **Notifications** fire on: 🚀 start, ✅ each instance grabbed, 🎉 all done, ⚠️ quota exceeded, ❌ errors. Configure any/both channels and test with `curl -X POST http://127.0.0.1:8090/api/notify-test`.
 
 ### Security
 - The dashboard can create cloud resources and has **no authentication** — bind it to `127.0.0.1` or a trusted LAN only, never expose it to the internet.
@@ -62,7 +67,7 @@ docker compose up -d --build
 - **多规格混合 / 多实例**:例如一个任务同时抢 2 台 AMD 小鸡 + 1 台 ARM 4核/24G。
 - **幂等可续跑**:记录已存在的实例;容器重启后从 `data/job.json` **自动恢复**,不会重复创建。
 - **运行时长**:一直跑到抢满,或限时 N 分钟。
-- **可选 Telegram 通知**。
+- **消息推送**(PushPlus 微信 + Telegram):每抢到一台 / 全部抢满 / 出错或配额上限时推送;PushPlus 国内直连免代理。
 - 遇 `容量不足` 重试、`429` 退避、`LimitExceeded` 停止。
 
 ### 架构
@@ -80,6 +85,18 @@ mkdir -p oci keys data
 docker compose up -d --build
 # 打开 http://127.0.0.1:8090
 ```
+
+### 通知配置(可选)
+在 `.env` 里填以下任意一个/两个渠道,抢到/抢满/出错时会推送:
+
+| 配置项 | 说明 |
+|-----|---------|
+| `PUSHPLUS_TOKEN` | PushPlus 微信推送 token(https://www.pushplus.plus,国内直连免代理)|
+| `PUSHPLUS_TOPIC` | 可选,PushPlus 群组编码(一对多)|
+| `TG_BOT_TOKEN` / `TG_CHAT_ID` | Telegram 机器人推送 |
+| `NOTIFY_PROXY` | 仅 Telegram 用的代理(国内一般必填),如 `http://192.168.1.1:7890` |
+
+推送时机:🚀 启动、✅ 每抢到一台、🎉 全部抢满、⚠️ 配额上限、❌ 出错。配置后可用 `curl -X POST http://127.0.0.1:8090/api/notify-test` 测试。
 
 ### 安全提醒
 - 面板**无登录鉴权**且能创建云资源——只绑定本机或可信内网,切勿暴露公网。
