@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>甲骨文免费 ARM 实例抢占</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         background: #0f172a; color: #e2e8f0; line-height: 1.6; padding: 24px; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+          padding: 18px; margin-bottom: 18px; }
+  .card h2 { font-size: 15px; margin-bottom: 12px; color: #cbd5e1; }
+  .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .preset { border: 2px solid #334155; border-radius: 10px; padding: 14px; cursor: pointer;
+            transition: .15s; background: #0f172a; }
+  .preset:hover { border-color: #475569; }
+  .preset.sel { border-color: #38bdf8; background: #0c4a6e33; }
+  .preset .pn { font-weight: 600; font-size: 15px; }
+  .preset .pd { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 6px 8px; text-align: center; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 500; font-size: 12px; }
+  input[type=number] { width: 72px; background: #0f172a; border: 1px solid #475569;
+        color: #e2e8f0; border-radius: 6px; padding: 5px; text-align: center; }
+  .btn { background: #334155; color: #e2e8f0; border: none; border-radius: 8px;
+         padding: 8px 16px; cursor: pointer; font-size: 14px; }
+  .btn:hover { background: #475569; }
+  .btn.pri { background: #0284c7; } .btn.pri:hover { background: #0369a1; }
+  .btn.danger { background: #b91c1c; } .btn.danger:hover { background: #991b1b; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.sm { padding: 4px 10px; font-size: 13px; }
+  .meter { display: flex; gap: 18px; margin: 12px 0; flex-wrap: wrap; }
+  .meter div { font-size: 13px; }
+  .meter b { font-size: 15px; }
+  .ok { color: #4ade80; } .bad { color: #f87171; }
+  .row-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+  label { font-size: 13px; color: #cbd5e1; }
+  #log { background: #020617; border: 1px solid #334155; border-radius: 8px;
+         padding: 12px; height: 320px; overflow-y: auto; font-family: monospace;
+         font-size: 12.5px; white-space: pre-wrap; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:12px; }
+  .b-idle{background:#334155}.b-running{background:#0369a1}.b-done{background:#15803d}
+  .b-stopped{background:#78716c}.b-error{background:#b91c1c}
+  .warn { background:#422006; border:1px solid #a16207; color:#fde68a; padding:8px 12px;
+          border-radius:8px; font-size:13px; margin-bottom:16px; }
+  .danger-warn { background:#450a0a; border:1px solid #dc2626; color:#fecaca; }
+  .pill { font-size:12px; color:#94a3b8; }
+  .st-pending{color:#94a3b8}.st-trying{color:#fbbf24}.st-created{color:#4ade80}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚀 甲骨文免费 ARM 实例抢占</h1>
+  <div class="sub" id="sub">规格 VM.Standard.A1.Flex · 免费额度 4核 / 24GB / 200GB</div>
+  <div class="warn danger-warn">🚨 <b>PAYG / 已升级账号注意</b>:超出免费额度(ARM 2核/12G · AMD 2台 · 存储 200G)会<b>真实扣费</b>!(甲骨文已将 A1 免费额度降为约 2核/12G 持续运行)。本工具已锁定免费上限,但请勿在控制台手动另开收费资源。本面板可创建云资源,默认仅本机/内网访问,勿暴露公网。</div>
+  <div class="warn" id="cfgwarn" style="display:none"></div>
+
+  <div class="card">
+    <h2>① 选择方案</h2>
+    <div class="presets" id="presets"></div>
+  </div>
+
+  <div class="card">
+    <h2>📊 账号当前真实占用(来自 OCI,每 15s 刷新)</h2>
+    <div class="meter" id="usage"><span class="pill">加载中...</span></div>
+    <div id="usageInst" class="pill"></div>
+    <div id="orphanWarn" class="warn danger-warn" style="display:none;margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h2>② 自定义组合(可在方案基础上修改,实时校验额度)</h2>
+    <table>
+      <thead><tr><th>规格</th><th>核数(OCPU)</th><th>内存(GB)</th><th>启动盘(GB)</th><th>台数</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="row-actions">
+      <button class="btn sm" onclick="addRow()">+ 添加一组</button>
+    </div>
+    <div class="meter" id="meter"></div>
+  </div>
+
+  <div class="card">
+    <h2>③ 运行时长</h2>
+    <div class="row-actions">
+      <label><input type="radio" name="dur" value="until" checked> 一直跑到抢满</label>
+      <label><input type="radio" name="dur" value="limit"> 限时</label>
+      <input type="number" id="durMin" value="120" min="1" style="width:90px"> 分钟
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row-actions">
+      <button class="btn pri" id="startBtn" onclick="start()">开始抢占</button>
+      <button class="btn danger" id="stopBtn" onclick="stop()" disabled>停止</button>
+      <span>状态: <span class="badge b-idle" id="state">idle</span></span>
+      <span class="pill" id="remain"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>④ 实时状态与日志</h2>
+    <div id="plan" class="meter"></div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+let LIMITS={arm_ocpus:4,arm_memory_gb:24,micro_count:2,boot_gb:200}, MIN_BOOT=50, PRESETS=[], SHAPES={};
+
+async function init() {
+  const r = await fetch('/api/presets').then(r=>r.json());
+  LIMITS=r.limits; MIN_BOOT=r.min_boot_gb; PRESETS=r.presets; SHAPES=r.shapes;
+  document.getElementById('sub').textContent =
+    `区域 ${r.region||'(未配置)'} · 免费额度: ARM ${LIMITS.arm_ocpus}核/${LIMITS.arm_memory_gb}GB + AMD最多${LIMITS.micro_count}台(1核/1G) · 共享存储 ${LIMITS.boot_gb}GB`;
+  if (!r.configured) {
+    const w=document.getElementById('cfgwarn'); w.style.display='block';
+    w.textContent='❌ 后端缺少 COMPARTMENT_ID / SUBNET_ID / IMAGE_ID 配置,请检查 .env。';
+  } else if (!r.amd_ready) {
+    const w=document.getElementById('cfgwarn'); w.style.display='block';
+    w.textContent='⚠️ 未配置 IMAGE_ID_AMD,AMD(E2.1.Micro)规格不可用。';
+  }
+  const box = document.getElementById('presets');
+  PRESETS.forEach(p => {
+    const d = document.createElement('div');
+    d.className='preset'; d.dataset.id=p.id;
+    d.innerHTML = `<div class="pn">${p.name}</div><div class="pd">${p.desc}</div>`;
+    d.onclick = () => selectPreset(p);
+    box.appendChild(d);
+  });
+  // 加载时:若有正在运行/已存在的任务,用其真实配置还原表单,避免与实际不符
+  let cur=null;
+  try { cur = await fetch('/api/status').then(r=>r.json()); } catch(e){}
+  if (cur && Array.isArray(cur.items) && cur.items.length && cur.state && cur.state!=='idle') {
+    document.getElementById('rows').innerHTML='';
+    cur.items.forEach(it => addRow(it));
+    document.querySelectorAll('.preset').forEach(e=>e.classList.remove('sel'));
+    // 时长:若设了截止时间则显示限时
+    if (cur.duration_minutes) {
+      const lim=document.querySelector('input[name=dur][value=limit]'); if(lim){lim.checked=true; document.getElementById('durMin').value=cur.duration_minutes;}
+    }
+    recalc();
+    const sub=document.getElementById('sub');
+    sub.innerHTML += ' · <span style="color:#4ade80">表单已同步为当前运行配置</span>';
+  } else {
+    selectPreset(PRESETS[1]); // 无运行任务时用默认方案B
+  }
+  poll(); setInterval(poll, 3000);
+  pollUsage(); setInterval(pollUsage, 15000);
+}
+
+async function pollUsage() {
+  let u; try { u = await fetch('/api/usage').then(r=>r.json()); } catch(e){ return; }
+  if (u.error) { document.getElementById('usage').innerHTML='<span class="bad">查询失败: '+u.error+'</span>'; return; }
+  const cls=(v,lim)=>v<=lim?'ok':'bad';
+  document.getElementById('usage').innerHTML =
+    `<div class="${cls(u.arm_ocpus,LIMITS.arm_ocpus)}">ARM核 <b>${u.arm_ocpus}</b>/${LIMITS.arm_ocpus}</div>
+     <div class="${cls(u.arm_memory_gb,LIMITS.arm_memory_gb)}">ARM内存 <b>${u.arm_memory_gb}</b>/${LIMITS.arm_memory_gb}GB</div>
+     <div class="${cls(u.micro_count,LIMITS.micro_count)}">AMD台数 <b>${u.micro_count}</b>/${LIMITS.micro_count}</div>
+     <div class="${cls(u.boot_gb,LIMITS.boot_gb)}">存储 <b>${u.boot_gb}</b>/${LIMITS.boot_gb}GB</div>`;
+  document.getElementById('usageInst').textContent =
+    '实例: ' + (u.instances.length ? u.instances.map(i=>`${i.name}(${i.shape.replace('VM.Standard.','')}${i.managed?'':' ⚠外部'})`).join(' · ') : '无');
+  const ow=document.getElementById('orphanWarn');
+  if (u.orphan) {
+    ow.style.display='block';
+    ow.textContent='⚠️ 检测到「非本工具创建」的实例(上面标⚠外部),它们的资源不在本工具计划内,叠加后可能超出免费额度,请自行核对!';
+  } else { ow.style.display='none'; }
+}
+
+function selectPreset(p) {
+  document.querySelectorAll('.preset').forEach(e=>e.classList.toggle('sel', e.dataset.id===p.id));
+  document.getElementById('rows').innerHTML='';
+  p.items.forEach(it => addRow(it));
+  recalc();
+}
+
+function shapeOptions(sel) {
+  return Object.entries(SHAPES).map(([k,v])=>
+    `<option value="${k}" ${k===sel?'selected':''}>${v.label}</option>`).join('');
+}
+
+function addRow(it) {
+  it = it || {shape:'arm', ocpus:1, memory_gb:6, boot_gb:50, count:1};
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><select class="c-s">${shapeOptions(it.shape||'arm')}</select></td>
+    <td><input type="number" min="1" value="${it.ocpus}" class="c-o"></td>
+    <td><input type="number" min="1" value="${it.memory_gb}" class="c-m"></td>
+    <td><input type="number" min="${MIN_BOOT}" value="${it.boot_gb}" class="c-b"></td>
+    <td><input type="number" min="1" value="${it.count}" class="c-c"></td>
+    <td><button class="btn sm danger" onclick="this.closest('tr').remove();recalc()">✕</button></td>`;
+  document.getElementById('rows').appendChild(tr);
+  const applyShape = () => {
+    const k = tr.querySelector('.c-s').value, sp = SHAPES[k];
+    const o = tr.querySelector('.c-o'), m = tr.querySelector('.c-m');
+    if (sp && !sp.flex) {            // 固定规格(E2.1.Micro)锁定 1核/1G
+      o.value = sp.fixed_ocpus; m.value = sp.fixed_mem;
+      o.disabled = m.disabled = true;
+    } else { o.disabled = m.disabled = false; }
+    recalc();
+  };
+  tr.querySelector('.c-s').addEventListener('change', applyShape);
+  tr.querySelectorAll('input').forEach(i=>i.addEventListener('input', recalc));
+  applyShape();
+}
+
+function readItems() {
+  return [...document.querySelectorAll('#rows tr')].map(tr=>({
+    shape: tr.querySelector('.c-s').value,
+    ocpus:+tr.querySelector('.c-o').value, memory_gb:+tr.querySelector('.c-m').value,
+    boot_gb:+tr.querySelector('.c-b').value, count:+tr.querySelector('.c-c').value }));
+}
+
+function recalc() {
+  const its = readItems();
+  let ao=0, am=0, mc=0, b=0, n=0;
+  its.forEach(i=>{
+    n += i.count; b += i.boot_gb*i.count;
+    if (i.shape==='micro') { mc += i.count; }
+    else { ao += i.ocpus*i.count; am += i.memory_gb*i.count; }
+  });
+  const okArmO=ao<=LIMITS.arm_ocpus, okArmM=am<=LIMITS.arm_memory_gb,
+        okMc=mc<=LIMITS.micro_count, okB=b<=LIMITS.boot_gb,
+        okRow=its.every(i=>i.boot_gb>=MIN_BOOT && i.count>=1 && (i.shape==='micro'||(i.ocpus>=1&&i.memory_gb>=1)));
+  const ok = okArmO&&okArmM&&okMc&&okB&&okRow;
+  const cls=v=>v?'ok':'bad';
+  document.getElementById('meter').innerHTML =
+    `<div>实例总数 <b>${n}</b></div>
+     <div class="${cls(okArmO)}">ARM核 <b>${ao}</b>/${LIMITS.arm_ocpus}</div>
+     <div class="${cls(okArmM)}">ARM内存 <b>${am}</b>/${LIMITS.arm_memory_gb}GB</div>
+     <div class="${cls(okMc)}">AMD台数 <b>${mc}</b>/${LIMITS.micro_count}</div>
+     <div class="${cls(okB)}">存储 <b>${b}</b>/${LIMITS.boot_gb}GB</div>
+     <div class="${cls(ok)}">${ok?'✓ 符合免费额度':'✗ 超出额度或参数非法'}</div>`;
+  document.getElementById('startBtn').disabled = !ok;
+  return ok;
+}
+
+async function start() {
+  if (!recalc()) return;
+  const dur = document.querySelector('input[name=dur]:checked').value;
+  const body = { items: readItems(),
+    duration_minutes: dur==='limit' ? +document.getElementById('durMin').value : null };
+  const j = await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)}).then(r=>r.json());
+  if (!j.ok) alert('启动失败: ' + (j.error||'未知'));
+  poll();
+}
+async function stop(){ await fetch('/api/stop',{method:'POST'}); poll(); }
+
+async function poll() {
+  let s; try { s = await fetch('/api/status').then(r=>r.json()); } catch(e){ return; }
+  const badge=document.getElementById('state');
+  badge.textContent=s.state; badge.className='badge b-'+s.state;
+  const running=s.state==='running';
+  document.getElementById('startBtn').disabled = running || !recalc();
+  document.getElementById('stopBtn').disabled = !running;
+  document.getElementById('remain').textContent =
+    s.remaining_seconds!=null ? `剩余 ${Math.floor(s.remaining_seconds/60)}分${s.remaining_seconds%60}秒` : '';
+  document.getElementById('plan').innerHTML = (s.plan||[]).map(p=>
+    `<div class="st-${p.status}">● ${p.name} <span class="pill">${p.shape_name||''} ${p.ocpus}核/${p.memory_gb}GB [${p.status}]</span></div>`).join('');
+  const log=document.getElementById('log');
+  const atBottom = log.scrollHeight-log.scrollTop-log.clientHeight < 40;
+  log.textContent = (s.logs||[]).join('\n');
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+init();
+</script>
+</body>
+</html>

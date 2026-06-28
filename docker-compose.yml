@@ -1,0 +1,23 @@
+services:
+  oci-grab:
+    build: .
+    container_name: oci-grab
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # 仅绑定本机 127.0.0.1,避免暴露到公网(面板可创建云资源,无鉴权)
+      - "127.0.0.1:8090:8000"
+    volumes:
+      - ./oci:/root/.oci:ro
+      - ./keys:/keys:ro
+      - ./data:/data
+    environment:
+      - TZ=Asia/Shanghai
+      - OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+      - SUPPRESS_LABEL_WARNING=True
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

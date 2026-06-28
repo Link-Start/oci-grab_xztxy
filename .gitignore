@@ -1,0 +1,10 @@
+.env
+oci/
+keys/
+data/
+proxy/
+router-backup/
+ka/
+*.log
+__pycache__/
+*.pyc

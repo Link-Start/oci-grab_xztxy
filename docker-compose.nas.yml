@@ -1,0 +1,23 @@
+services:
+  oci-grab:
+    build: .
+    container_name: oci-grab
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # 局域网可访问 http://192.168.15.161:8090(⚠️ 无登录鉴权,仅限可信内网使用)
+      - "8090:8000"
+    volumes:
+      - ./oci:/root/.oci:ro
+      - ./keys:/keys:ro
+      - ./data:/data
+    environment:
+      - TZ=Asia/Shanghai
+      - OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+      - SUPPRESS_LABEL_WARNING=True
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
