@@ -41,17 +41,19 @@ notify() {
 
 # 返回当前已存在(未 TERMINATED)、名字以 ${DISPLAY_NAME}- 开头的实例名,每行一个
 list_existing_names() {
-  local json
+  local json status
   json=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" --output json </dev/null 2>/dev/null)
-  [ -z "$json" ] && return 0
+  status=$?
+  if [ $status -ne 0 ] || [ -z "$json" ]; then
+    return 1
+  fi
   printf '%s' "$json" | DISPLAY_NAME="$DISPLAY_NAME" python3 -c '
 import sys, json, os
 prefix = os.environ.get("DISPLAY_NAME", "") + "-"
-try:
-    data = json.load(sys.stdin).get("data", []) or []
-except Exception:
-    data = []
-for x in data:
+payload = json.load(sys.stdin)
+if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+    raise ValueError("OCI response missing data list")
+for x in payload["data"]:
     name = x.get("display-name", "")
     state = (x.get("lifecycle-state") or "").upper()
     if name.startswith(prefix) and state not in ("TERMINATED", "TERMINATING"):
@@ -106,8 +108,15 @@ attempt=0
 while true; do
   attempt=$((attempt + 1))
 
-  # 每轮开始刷新"已存在"集合,计算还差哪些(幂等,重启不会重复建)
-  mapfile -t EXISTING < <(list_existing_names)
+  # 每轮开始刷新"已存在"集合；查询失败时禁止继续创建，避免把失败误判为零实例
+  EXISTING_OUTPUT=$(list_existing_names)
+  if [ $? -ne 0 ]; then
+    log "⚠️ 查询已有实例失败，本轮不执行创建，${SLEEP_SECONDS}s 后重试。"
+    sleep "$SLEEP_SECONDS"
+    continue
+  fi
+  EXISTING=()
+  [ -n "$EXISTING_OUTPUT" ] && mapfile -t EXISTING <<< "$EXISTING_OUTPUT"
   declare -a TODO=()
   for t in "${TARGETS[@]}"; do
     found=0

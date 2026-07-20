@@ -115,6 +115,6 @@ curl -s -X POST http://127.0.0.1:8090/api/notify-test
 | `/api/presets` 的 `configured` 为 false | `.env` 的 OCID 没填全,或 `oci/config` 缺失 |
 | 日志报凭证/认证错误 | 检查 `oci/config`(user/tenancy/fingerprint/region)与 `oci_api_key.pem` 是否匹配、key_file 路径 |
 | `Out of host capacity` | **正常**,ARM 容量不足,引擎会自动换可用域并重试,耐心等 |
-| `LimitExceeded` / `QuotaExceeded` | 已达免费额度上限,引擎会停止;别再手动多开 |
+| `LimitExceeded` / `QuotaExceeded` | 对应规格已达配额上限;引擎跳过该规格并继续其他规格。若全部规格都报配额上限,请检查 OCI 实际用量,别再手动多开 |
 | 创建失败且报架构错误 | `IMAGE_ID` 必须 aarch64、`IMAGE_ID_AMD` 必须 x86_64,且与区域匹配 |
 | 抢到但连不上实例 | 用 `ssh -i keys/id_rsa ubuntu@<公网IP>`(Ubuntu 镜像);确认子网安全列表放行 22 |

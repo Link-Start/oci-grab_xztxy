@@ -17,7 +17,7 @@ Oracle's Always Free ARM (A1.Flex) capacity is frequently exhausted (`Out of hos
 - **Idempotent & resumable**: tracks which named instances already exist; a container restart auto-resumes the job from `data/job.json` and never double-creates.
 - **Runtime limit**: run until grabbed, or for N minutes.
 - **Push notifications** (PushPlus / WeChat + Telegram) on each instance grabbed, all-done, and errors/quota-exceeded; PushPlus works in mainland China without a proxy.
-- Engine retries on `Out of host capacity`, backs off on `429`, and stops on `LimitExceeded`.
+- Engine retries on `Out of host capacity`, backs off on `429`, and isolates `LimitExceeded` to the affected shape so other shapes continue.
 
 ### Architecture
 - `app.py` — FastAPI backend + background grab engine (`GrabManager`), free-tier validation, REST API (`/api/presets|validate|start|stop|status|usage|notify-test`), auto-resume.
@@ -73,7 +73,7 @@ docker compose up -d --build
 - **幂等可续跑**:记录已存在的实例;容器重启后从 `data/job.json` **自动恢复**,不会重复创建。
 - **运行时长**:一直跑到抢满,或限时 N 分钟。
 - **消息推送**(PushPlus 微信 + Telegram):每抢到一台 / 全部抢满 / 出错或配额上限时推送;PushPlus 国内直连免代理。
-- 遇 `容量不足` 重试、`429` 退避、`LimitExceeded` 停止。
+- 遇 `容量不足` 重试、`429` 退避;`LimitExceeded` 仅跳过对应规格,其他规格继续抢占。
 
 ### 架构
 - `app.py` — FastAPI 后端 + 后台抢占引擎(`GrabManager`)、额度校验、REST API、自动恢复。

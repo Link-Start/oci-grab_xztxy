@@ -260,22 +260,30 @@ class GrabManager:
         return ""
 
     # ---------- 已存在(未终止)实例名 ----------
-    def existing_names(self) -> List[str]:
+    def existing_names(self) -> Optional[List[str]]:
+        """返回未终止实例名；查询失败时返回 None，禁止将失败误判为零实例。"""
         try:
             out = subprocess.run(
                 ["oci", "compute", "instance", "list",
                  "--compartment-id", COMPARTMENT_ID, "--output", "json"],
                 capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
             )
-            data = (json.loads(out.stdout or "{}") or {}).get("data", []) or []
+            if out.returncode != 0:
+                msg = ((out.stderr or out.stdout) or "未知错误").strip().replace("\n", " ")[:200]
+                self.log(f"  ⚠️ 查询已有实例失败(rc={out.returncode}): {msg}")
+                return None
+            payload = json.loads(out.stdout or "")
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValueError("OCI 返回缺少 data 列表")
             names = []
-            for x in data:
-                st = (x.get("lifecycle-state") or "").upper()
-                if st not in ("TERMINATED", "TERMINATING"):
-                    names.append(x.get("display-name", ""))
+            for instance in payload["data"]:
+                state = (instance.get("lifecycle-state") or "").upper()
+                if state not in ("TERMINATED", "TERMINATING"):
+                    names.append(instance.get("display-name", ""))
             return names
-        except Exception:
-            return []
+        except Exception as e:
+            self.log(f"  ⚠️ 查询已有实例失败: {str(e)[:200]}")
+            return None
 
     # ---------- 启动 ----------
     def start(self, items: List[Dict], duration_minutes: Optional[int],
@@ -360,9 +368,16 @@ class GrabManager:
                         ", ".join(f"{p['name']}({p['ocpus']}核/{p['memory_gb']}GB)" for p in self.plan))
 
             rnd = 0
+            quota_notified = set()
             while not self.stop_flag.is_set():
                 rnd += 1
-                exist = set(self.existing_names())
+                existing = self.existing_names()
+                if existing is None:
+                    self.log("  → 无法确认现有实例，本轮不执行创建，60s 后重试")
+                    self._sleep(60)
+                    continue
+
+                exist = set(existing)
                 todo = [p for p in self.plan if p["name"] not in exist]
                 for p in self.plan:
                     if p["name"] in exist:
@@ -381,7 +396,13 @@ class GrabManager:
                 self.log(f"第 {rnd} 轮 | 已有 {len(self.plan)-len(todo)}/{len(self.plan)} 台,"
                          f"待抢 {', '.join(p['name'] for p in todo)}")
 
+                quota_shapes = set()
                 for p in todo:
+                    shape = p["shape"]
+                    if shape in quota_shapes:
+                        p["status"] = "quota"
+                        self.log(f"  → [{p['name']}] 本轮跳过：{SHAPES[shape]['label']} 已返回配额上限")
+                        continue
                     if self._expired() or self.stop_flag.is_set():
                         break
                     for ad in self.ads:
@@ -406,12 +427,14 @@ class GrabManager:
                         if "Out of host capacity" in out:
                             self.log(f"  → [{p['name']}] {ad} 容量不足")
                         elif "LimitExceeded" in out or "QuotaExceeded" in out:
-                            self.state = "error"
-                            self.log("  → ⚠️ 已达配额上限,停止。")
-                            self.notify("⚠️ OCI 抢占停止",
-                                        "已达配额上限(LimitExceeded / QuotaExceeded),已停止。")
-                            self._clear_job()
-                            return
+                            p["status"] = "quota"
+                            quota_shapes.add(shape)
+                            self.log(f"  → [{p['name']}] {SHAPES[shape]['label']} 已达配额上限；跳过该规格，继续其他规格")
+                            if shape not in quota_notified:
+                                quota_notified.add(shape)
+                                self.notify("⚠️ OCI 规格配额已满",
+                                            f"{SHAPES[shape]['label']} 已达配额上限；任务未停止，将继续尝试其他规格。")
+                            break
                         elif "TooManyRequests" in out or "429" in out:
                             self.log("  → 被限流(429),延长等待")
                             self._sleep(120)
